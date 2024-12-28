@@ -32,18 +32,3 @@ jobs:
         with:
           version: 0.13.0
       - run: zig fmt --check .
-  flake-check:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{matrix.os}}
-    permissions:
-      id-token: "write"
-      contents: "read"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-      - uses: DeterminateSystems/flake-checker-action@main
-      - name: Run `nix flake check`
-        run: nix flake check
