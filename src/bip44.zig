@@ -130,18 +130,18 @@ pub const Descriptor = struct {
 // Purpose, cointype, and account use hardened derivation
 // 2147483648 is added to the passed values for this fields.
 pub fn generateAccount(extended_privkey: bip32.ExtendedPrivateKey, purpose: u32, cointype: u32, account: u32, change: u32, index: u32) !bip32.ExtendedPublicKey {
-    const purpose_extended_privkey = try bip32.deriveHardenedChild(extended_privkey, purpose + 2147483648);
-    const cointype_extended_privkey = try bip32.deriveHardenedChild(purpose_extended_privkey, cointype + 2147483648);
+    const purpose_extended_privkey = try extended_privkey.deriveHardenedChild(purpose + 2147483648);
+    const cointype_extended_privkey = try purpose_extended_privkey.deriveHardenedChild(cointype + 2147483648);
 
     // Add check that avoid creation of this account if previous account has no transaction associated
     // as specified in bip44 https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki#account
-    const account_extended_privkey = try bip32.deriveHardenedChild(cointype_extended_privkey, account + 2147483648);
+    const account_extended_privkey = try cointype_extended_privkey.deriveHardenedChild(account + 2147483648);
 
     const pubkey = bip32.PublicKey.fromPrivateKey(account_extended_privkey.privatekey);
     const account_extended_pubkey = bip32.ExtendedPublicKey{ .key = pubkey, .chaincode = account_extended_privkey.chaincode };
 
-    const change_extended_pubkey = try bip32.deriveChildFromExtendedPublicKey(account_extended_pubkey, change);
-    const index_extended_pubkey = try bip32.deriveChildFromExtendedPublicKey(change_extended_pubkey, index);
+    const change_extended_pubkey = try account_extended_pubkey.deriveChild(change);
+    const index_extended_pubkey = try change_extended_pubkey.deriveChild(index);
 
     return index_extended_pubkey;
 }
@@ -149,15 +149,15 @@ pub fn generateAccount(extended_privkey: bip32.ExtendedPrivateKey, purpose: u32,
 // Purpose, cointype, and account use hardened derivation
 // 2147483648 is added to the passed values for this fields.
 pub fn generateAccountPrivate(extended_privkey: bip32.ExtendedPrivateKey, purpose: u32, cointype: u32, account: u32, change: u32, index: u32) !bip32.ExtendedPrivateKey {
-    const purpose_extended_privkey = try bip32.deriveHardenedChild(extended_privkey, purpose + 2147483648);
-    const cointype_extended_privkey = try bip32.deriveHardenedChild(purpose_extended_privkey, cointype + 2147483648);
+    const purpose_extended_privkey = try extended_privkey.deriveHardenedChild(purpose + 2147483648);
+    const cointype_extended_privkey = try purpose_extended_privkey.deriveHardenedChild(cointype + 2147483648);
 
     // Add check that avoid creation of this account if previous account has no transaction associated
     // as specified in bip44 https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki#account
-    const account_extended_privkey = try bip32.deriveHardenedChild(cointype_extended_privkey, account + 2147483648);
+    const account_extended_privkey = try cointype_extended_privkey.deriveHardenedChild(account + 2147483648);
 
-    const change_extended_privkey = try bip32.deriveChildFromExtendedPrivateKey(account_extended_privkey, change);
-    const index_extended_privkey = try bip32.deriveChildFromExtendedPrivateKey(change_extended_privkey, index);
+    const change_extended_privkey = try account_extended_privkey.deriveChild(change);
+    const index_extended_privkey = try change_extended_privkey.deriveChild(index);
 
     return index_extended_privkey;
 }
@@ -165,19 +165,19 @@ pub fn generateAccountPrivate(extended_privkey: bip32.ExtendedPrivateKey, purpos
 // Purpose, cointype, and account use hardened derivation
 // 2147483648 is added to the passed values for this fields.
 pub fn generateDescriptorPrivate(extended_privkey: bip32.ExtendedPrivateKey, purpose: u32, cointype: u32, account: u32) !bip32.ExtendedPrivateKey {
-    const purpose_extended_privkey = try bip32.deriveHardenedChild(extended_privkey, purpose + 2147483648);
-    const cointype_extended_privkey = try bip32.deriveHardenedChild(purpose_extended_privkey, cointype + 2147483648);
+    const purpose_extended_privkey = try extended_privkey.deriveHardenedChild(purpose + 2147483648);
+    const cointype_extended_privkey = try purpose_extended_privkey.deriveHardenedChild(cointype + 2147483648);
 
     // Add check that avoid creation of this account if previous account has no transaction associated
     // as specified in bip44 https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki#account
-    const account_extended_privkey = try bip32.deriveHardenedChild(cointype_extended_privkey, account + 2147483648);
+    const account_extended_privkey = try cointype_extended_privkey.deriveHardenedChild(account + 2147483648);
 
     return account_extended_privkey;
 }
 
 pub fn generatePublicFromAccountPublicKey(extended_pubkey: bip32.ExtendedPublicKey, change: u32, index: u32) !bip32.PublicKey {
-    const change_extended_pubkey = try bip32.deriveChildFromExtendedPublicKey(extended_pubkey, change);
-    const index_extended_pubkey = try bip32.deriveChildFromExtendedPublicKey(change_extended_pubkey, index);
+    const change_extended_pubkey = try extended_pubkey.deriveChild(change);
+    const index_extended_pubkey = try change_extended_pubkey.deriveChildFromExtendedPublicKey(index);
 
     return index_extended_pubkey.key;
 }
@@ -212,7 +212,7 @@ test "generateDescriptorPrivate" {
     const addr_serialized = "xprv9s21ZrQH143K46XPEERBYSrepx6CqH2BDKpP9CzBougQShKQRk1NFXrLH8FzeC5HmLDVm1wmJa8k5Xy8LvcirPkNAF5q5Fav1zmkd8omLnR".*;
     const master_extended_privkey = try bip32.ExtendedPrivateKey.fromAddress(addr_serialized);
     const extended_privkey = try generateDescriptorPrivate(master_extended_privkey, bip_84_purpose, 1, 0);
-    const extended_privkey_index = try bip32.deriveChildFromExtendedPrivateKey(extended_privkey, 0);
+    const extended_privkey_index = try extended_privkey.deriveChild(0);
     const public = bip32.PublicKey.fromPrivateKey(extended_privkey_index.privatekey);
     const compressed = try public.toStrCompressed();
     const expected = "02351fc272fab79ebd0386c0308ff7c9b7c171f77c63e979d5f20b38c2a4e93eac";

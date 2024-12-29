@@ -83,6 +83,68 @@ pub const ExtendedPrivateKey = struct {
         return ExtendedPrivateKey{ .privatekey = pk, .chaincode = chaincode };
     }
 
+    pub fn deriveChild(self: ExtendedPrivateKey, index: u32) !ExtendedPrivateKey {
+        assert(index >= 0);
+        assert(index <= 2147483647);
+        const index_bytes: [4]u8 = @bitCast(@byteSwap(index));
+        const public = PublicKey.fromPrivateKey(self.privatekey);
+        const compressed = try public.compress();
+        const data: [37]u8 = compressed ++ index_bytes;
+
+        // 74 = 37 * 2 (2 hex characters per byte)
+        var buffer: [74]u8 = undefined;
+        _ = try std.fmt.bufPrint(&buffer, "{x}", .{std.fmt.fmtSliceHexLower(&data)});
+        var chaincode_buffer: [64]u8 = undefined;
+        _ = try std.fmt.bufPrint(&chaincode_buffer, "{x}", .{std.fmt.fmtSliceHexLower(&self.chaincode)});
+
+        var bytes: [37]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&bytes, &buffer);
+        var chaincode_bytes: [32]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&chaincode_bytes, &chaincode_buffer);
+
+        var I: [std.crypto.auth.hmac.sha2.HmacSha512.mac_length]u8 = undefined;
+        std.crypto.auth.hmac.sha2.HmacSha512.create(I[0..], &bytes, &chaincode_bytes);
+
+        const private: u256 = std.mem.readInt(u256, &self.privatekey, .big);
+        const random: u256 = std.mem.readInt(u256, I[0..32], .big);
+        const k: u256 = @intCast(@mod(@as(u512, private) + random, crypto.secp256k1_number_of_points));
+
+        return ExtendedPrivateKey{
+            .privatekey = @bitCast(@byteSwap(k)),
+            .chaincode = I[32..].*,
+        };
+    }
+
+    pub fn deriveHardenedChild(self: ExtendedPrivateKey, index: u32) !ExtendedPrivateKey {
+        assert(index >= 2147483648);
+        assert(index <= 4294967295);
+        const prefix: [1]u8 = [1]u8{0b00000000};
+        const index_bytes: [4]u8 = @bitCast(@byteSwap(index));
+        const data: [37]u8 = prefix ++ self.privatekey ++ index_bytes;
+
+        var buffer: [74]u8 = undefined;
+        _ = try std.fmt.bufPrint(&buffer, "{x}", .{std.fmt.fmtSliceHexLower(&data)});
+        var chaincode_buffer: [64]u8 = undefined;
+        _ = try std.fmt.bufPrint(&chaincode_buffer, "{x}", .{std.fmt.fmtSliceHexLower(&self.chaincode)});
+
+        var bytes: [37]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&bytes, &buffer);
+        var chaincode_bytes: [32]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&chaincode_bytes, &chaincode_buffer);
+
+        var I: [std.crypto.auth.hmac.sha2.HmacSha512.mac_length]u8 = undefined;
+        std.crypto.auth.hmac.sha2.HmacSha512.create(I[0..], &bytes, &chaincode_bytes);
+
+        const private: u256 = std.mem.readInt(u256, &self.privatekey, .big);
+        const random: u256 = std.mem.readInt(u256, I[0..32], .big);
+        const k: u256 = @intCast(@mod(@as(u512, private) + random, crypto.secp256k1_number_of_points));
+
+        return ExtendedPrivateKey{
+            .privatekey = @bitCast(@byteSwap(k)),
+            .chaincode = I[32..].*,
+        };
+    }
+
     pub fn format(self: ExtendedPrivateKey, actual_fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = actual_fmt;
         _ = options;
@@ -235,98 +297,36 @@ pub const ExtendedPublicKey = struct {
         const pubkey = try PublicKey.fromStrCompressed(compressed_str);
         return ExtendedPublicKey{ .key = pubkey, .chaincode = chaincode };
     }
+
+    pub fn deriveChild(self: ExtendedPublicKey, index: u32) !ExtendedPublicKey {
+        assert(index >= 0);
+        assert(index <= 2147483647);
+        const index_bytes: [4]u8 = @bitCast(@byteSwap(index));
+        const compressed: [33]u8 = try self.key.compress();
+        const data: [37]u8 = compressed ++ index_bytes;
+
+        var buffer: [74]u8 = undefined;
+        _ = try std.fmt.bufPrint(&buffer, "{x}", .{std.fmt.fmtSliceHexLower(&data)});
+        var chaincode_buffer: [64]u8 = undefined;
+        _ = try std.fmt.bufPrint(&chaincode_buffer, "{x}", .{std.fmt.fmtSliceHexLower(&self.chaincode)});
+
+        var bytes: [37]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&bytes, &buffer);
+        var chaincode_bytes: [32]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&chaincode_bytes, &chaincode_buffer);
+
+        var I: [std.crypto.auth.hmac.sha2.HmacSha512.mac_length]u8 = undefined;
+        std.crypto.auth.hmac.sha2.HmacSha512.create(I[0..], &bytes, &chaincode_bytes);
+
+        const random: u256 = std.mem.readInt(u256, I[0..32], .big);
+        var point_hmac = crypto.Secp256k1Point{ .x = crypto.secp256k1_base_point.x, .y = crypto.secp256k1_base_point.y };
+        point_hmac.multiply(random);
+        var public = crypto.Secp256k1Point{ .x = self.key.point.x, .y = self.key.point.y };
+        public.add(point_hmac);
+
+        return ExtendedPublicKey{ .key = PublicKey{ .point = public }, .chaincode = I[32..].* };
+    }
 };
-
-pub fn deriveChildFromExtendedPrivateKey(extended_privkey: ExtendedPrivateKey, index: u32) !ExtendedPrivateKey {
-    assert(index >= 0);
-    assert(index <= 2147483647);
-    const index_bytes: [4]u8 = @bitCast(@byteSwap(index));
-    const public = PublicKey.fromPrivateKey(extended_privkey.privatekey);
-    const compressed = try public.compress();
-    const data: [37]u8 = compressed ++ index_bytes;
-
-    // 74 = 37 * 2 (2 hex characters per byte)
-    var buffer: [74]u8 = undefined;
-    _ = try std.fmt.bufPrint(&buffer, "{x}", .{std.fmt.fmtSliceHexLower(&data)});
-    var chaincode_buffer: [64]u8 = undefined;
-    _ = try std.fmt.bufPrint(&chaincode_buffer, "{x}", .{std.fmt.fmtSliceHexLower(&extended_privkey.chaincode)});
-
-    var bytes: [37]u8 = undefined;
-    _ = try std.fmt.hexToBytes(&bytes, &buffer);
-    var chaincode_bytes: [32]u8 = undefined;
-    _ = try std.fmt.hexToBytes(&chaincode_bytes, &chaincode_buffer);
-
-    var I: [std.crypto.auth.hmac.sha2.HmacSha512.mac_length]u8 = undefined;
-    std.crypto.auth.hmac.sha2.HmacSha512.create(I[0..], &bytes, &chaincode_bytes);
-
-    const private: u256 = std.mem.readInt(u256, &extended_privkey.privatekey, .big);
-    const random: u256 = std.mem.readInt(u256, I[0..32], .big);
-    const k: u256 = @intCast(@mod(@as(u512, private) + random, crypto.secp256k1_number_of_points));
-
-    return ExtendedPrivateKey{
-        .privatekey = @bitCast(@byteSwap(k)),
-        .chaincode = I[32..].*,
-    };
-}
-
-pub fn deriveChildFromExtendedPublicKey(extended_pubkey: ExtendedPublicKey, index: u32) !ExtendedPublicKey {
-    assert(index >= 0);
-    assert(index <= 2147483647);
-    const index_bytes: [4]u8 = @bitCast(@byteSwap(index));
-    const compressed: [33]u8 = try extended_pubkey.key.compress();
-    const data: [37]u8 = compressed ++ index_bytes;
-
-    var buffer: [74]u8 = undefined;
-    _ = try std.fmt.bufPrint(&buffer, "{x}", .{std.fmt.fmtSliceHexLower(&data)});
-    var chaincode_buffer: [64]u8 = undefined;
-    _ = try std.fmt.bufPrint(&chaincode_buffer, "{x}", .{std.fmt.fmtSliceHexLower(&extended_pubkey.chaincode)});
-
-    var bytes: [37]u8 = undefined;
-    _ = try std.fmt.hexToBytes(&bytes, &buffer);
-    var chaincode_bytes: [32]u8 = undefined;
-    _ = try std.fmt.hexToBytes(&chaincode_bytes, &chaincode_buffer);
-
-    var I: [std.crypto.auth.hmac.sha2.HmacSha512.mac_length]u8 = undefined;
-    std.crypto.auth.hmac.sha2.HmacSha512.create(I[0..], &bytes, &chaincode_bytes);
-
-    const random: u256 = std.mem.readInt(u256, I[0..32], .big);
-    var point_hmac = crypto.Secp256k1Point{ .x = crypto.secp256k1_base_point.x, .y = crypto.secp256k1_base_point.y };
-    point_hmac.multiply(random);
-    var public = crypto.Secp256k1Point{ .x = extended_pubkey.key.point.x, .y = extended_pubkey.key.point.y };
-    public.add(point_hmac);
-
-    return ExtendedPublicKey{ .key = PublicKey{ .point = public }, .chaincode = I[32..].* };
-}
-
-pub fn deriveHardenedChild(extended_privkey: ExtendedPrivateKey, index: u32) !ExtendedPrivateKey {
-    assert(index >= 2147483648);
-    assert(index <= 4294967295);
-    const prefix: [1]u8 = [1]u8{0b00000000};
-    const index_bytes: [4]u8 = @bitCast(@byteSwap(index));
-    const data: [37]u8 = prefix ++ extended_privkey.privatekey ++ index_bytes;
-
-    var buffer: [74]u8 = undefined;
-    _ = try std.fmt.bufPrint(&buffer, "{x}", .{std.fmt.fmtSliceHexLower(&data)});
-    var chaincode_buffer: [64]u8 = undefined;
-    _ = try std.fmt.bufPrint(&chaincode_buffer, "{x}", .{std.fmt.fmtSliceHexLower(&extended_privkey.chaincode)});
-
-    var bytes: [37]u8 = undefined;
-    _ = try std.fmt.hexToBytes(&bytes, &buffer);
-    var chaincode_bytes: [32]u8 = undefined;
-    _ = try std.fmt.hexToBytes(&chaincode_bytes, &chaincode_buffer);
-
-    var I: [std.crypto.auth.hmac.sha2.HmacSha512.mac_length]u8 = undefined;
-    std.crypto.auth.hmac.sha2.HmacSha512.create(I[0..], &bytes, &chaincode_bytes);
-
-    const private: u256 = std.mem.readInt(u256, &extended_privkey.privatekey, .big);
-    const random: u256 = std.mem.readInt(u256, I[0..32], .big);
-    const k: u256 = @intCast(@mod(@as(u512, private) + random, crypto.secp256k1_number_of_points));
-
-    return ExtendedPrivateKey{
-        .privatekey = @bitCast(@byteSwap(k)),
-        .chaincode = I[32..].*,
-    };
-}
 
 test "extendedMasterPrivateKeyFromSeed" {
     const seed = [64]u8{ 0b10111000, 0b01110011, 0b00100001, 0b00101111, 0b10001000, 0b01011100, 0b11001111, 0b11111011, 0b11110100, 0b01101001, 0b00101010, 0b11111100, 0b10111000, 0b01001011, 0b11000010, 0b11100101, 0b01011000, 0b10000110, 0b11011110, 0b00101101, 0b11111010, 0b00000111, 0b11011001, 0b00001111, 0b01011100, 0b00111100, 0b00100011, 0b10011010, 0b10111100, 0b00110001, 0b11000000, 0b10100110, 0b11001110, 0b00000100, 0b01111110, 0b00110000, 0b11111101, 0b10001011, 0b11110110, 0b10100010, 0b10000001, 0b11100111, 0b00010011, 0b10001001, 0b10101010, 0b10000010, 0b11010111, 0b00111101, 0b11110111, 0b01001100, 0b01111011, 0b10111111, 0b10110011, 0b10110000, 0b01101011, 0b01000110, 0b00111001, 0b10100101, 0b11001110, 0b11100111, 0b01110101, 0b11001100, 0b11001101, 0b00111100 };
@@ -353,7 +353,7 @@ test "deriveChildFromExtendedPrivateKey" {
     var seed: [64]u8 = undefined;
     _ = try std.fmt.hexToBytes(&seed, &seedhex);
     const epk = ExtendedPrivateKey.fromSeed(&seed);
-    const child = try deriveChildFromExtendedPrivateKey(epk, 0);
+    const child = try epk.deriveChild(0);
 
     const expectedprivatekeyaddr = "xprv9vHkqa6EV4sPZHYqZznhT2NPtPCjKuDKGY38FBWLvgaDx45zo9WQRUT3dKYnjwih2yJD9mkrocEZXo1ex8G81dwSM1fwqWpWkeS3v86pgKt".*;
     const expectedprivate = try ExtendedPrivateKey.fromAddress(expectedprivatekeyaddr);
@@ -365,7 +365,7 @@ test "deriveChildFromExtendedPrivateKeyIndex1" {
     var seed: [64]u8 = undefined;
     _ = try std.fmt.hexToBytes(&seed, &seedhex);
     const epk = ExtendedPrivateKey.fromSeed(&seed);
-    const child = try deriveChildFromExtendedPrivateKey(epk, 1);
+    const child = try epk.deriveChild(1);
     var privatekey: [64]u8 = undefined;
     var chaincode: [64]u8 = undefined;
     _ = try std.fmt.bufPrint(&privatekey, "{x}", .{std.fmt.fmtSliceHexLower(&child.privatekey)});
@@ -383,7 +383,7 @@ test "deriveChildFromExtendedPublicKey" {
     const epk = ExtendedPrivateKey.fromSeed(&seed);
     const public = PublicKey.fromPrivateKey(epk.privatekey);
     const extendedpublic = ExtendedPublicKey{ .key = public, .chaincode = epk.chaincode };
-    const extendedchild = try deriveChildFromExtendedPublicKey(extendedpublic, 0);
+    const extendedchild = try extendedpublic.deriveChild(0);
     const expectedPublicAddr = "xpub6812wt8cXaNNpj6dn1q7cYvhyyyYHAECx3Dx1vZYtJS9Ts5gz2BsmgBVxnbwg3g6vrZJSWJuBSmVSyyMwMKYRohB6WxCCnACY97JAF7AshB".*;
     const expectedpublic = try ExtendedPublicKey.fromAddress(expectedPublicAddr);
 
@@ -395,7 +395,7 @@ test "deriveChildFromExtendedPublicKeyIndex1" {
     // testing only with index = 0 is not enough since byte order matters and 0 is the same in both directions
     const addr = "tpubDCqjeTSmMEVcovTXiEJ8xNCZXobYFckihB9M6LsRMF9XNPX87ndZkLvGmY2z6PguGJDyUdzpF7tc1EtmqK1zJmPuJkfvutYGTz15JE7QW2Y".*;
     const epk = try ExtendedPublicKey.fromAddress(addr);
-    const derived = try deriveChildFromExtendedPublicKey(epk, 1);
+    const derived = try epk.deriveChild(1);
     const expectedpublic = "020387ef75af3aafba234f679ba4104b270eb8372bc7e727d13cfe4eec8122ac43".*;
     const expectedchaincode = "b88386ce58d712d33afe158f0322655c58cfab158cb7ec25b5fb6f880e1f6716".*;
     var chaincodehex: [64]u8 = undefined;
@@ -410,7 +410,7 @@ test "deriveHardenedChild" {
     var seed: [64]u8 = undefined;
     _ = try std.fmt.hexToBytes(&seed, &seedhex);
     const epk = ExtendedPrivateKey.fromSeed(&seed);
-    const child = try deriveHardenedChild(epk, 2147483648); // 0'
+    const child = try epk.deriveHardenedChild(2147483648); // 0'
     const expectedprivatekeyaddr = "xprv9vHkqa6NpjQMiZJLz4sFbVqYk7EXEUrWBd8drQZCp4furXS13egriq1pr2ncv2UBok3GifpitiQfp9kxNitz2RXbwtAo8hiv4CieaLTHyRL".*;
     const expectedprivate = try ExtendedPrivateKey.fromAddress(expectedprivatekeyaddr);
 
@@ -604,9 +604,9 @@ test "bip44Dervivation" {
     var seed: [64]u8 = undefined;
     _ = try std.fmt.hexToBytes(&seed, &seedhex);
     const epk = ExtendedPrivateKey.fromSeed(&seed);
-    const child = try deriveHardenedChild(epk, 2147483648 + 44); // 44'
-    const child2 = try deriveHardenedChild(child, 2147483648);
-    const child3 = try deriveHardenedChild(child2, 2147483648);
+    const child = try epk.deriveHardenedChild(2147483648 + 44); // 44'
+    const child2 = try child.deriveHardenedChild(2147483648);
+    const child3 = try child2.deriveHardenedChild(2147483648);
     const expectedprivatekeyaddr = "xprv9xibuu9WWWf3fYnGiKY6sqk8rvNHCZMjbLLDcF2Qj8N3WcNzw2AknNGapkd79mUuU2BwC5kvqcFuC5VAujGHBuT2gujogoMq1A4qDasdxVM".*;
     const expectedpublicaddr = "xpub6G3vxdEYuhYffVX9HjJrdDaQdeyG2bm2LCCM8FP7QcH5xtXkND1FPzEHYmWL9STdzZodqxyWBBXWV3BNRbJkhwMZBjZYmfwm1D5tVYwWfZ8".*;
     const expectedprivate = try ExtendedPrivateKey.fromAddress(expectedprivatekeyaddr);
@@ -614,8 +614,8 @@ test "bip44Dervivation" {
 
     const public = PublicKey.fromPrivateKey(child3.privatekey);
     const extendedpublic = ExtendedPublicKey{ .key = public, .chaincode = child3.chaincode };
-    const child4 = try deriveChildFromExtendedPublicKey(extendedpublic, 0);
-    const child5 = try deriveChildFromExtendedPublicKey(child4, 0);
+    const child4 = try extendedpublic.deriveChild(0);
+    const child5 = try child4.deriveChild(0);
 
     try std.testing.expectEqualSlices(u8, &expectedprivate.privatekey, &child3.privatekey);
     try std.testing.expectEqual(child5.key.point, expectedpublic.key.point);
